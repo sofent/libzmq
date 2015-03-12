@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -25,6 +25,7 @@
 
 #include "config.hpp"
 #include "atomic_counter.hpp"
+#include "metadata.hpp"
 
 //  Signature for free function to deallocate the message content.
 //  Note that it has to be declared as "C" so that it is the same as
@@ -49,6 +50,7 @@ namespace zmq
         {
             more = 1,           //  Followed by more parts
             command = 2,        //  Command frame (see ZMTP spec)
+            credential = 32,
             identity = 64,
             shared = 128
         };
@@ -67,10 +69,18 @@ namespace zmq
         unsigned char flags ();
         void set_flags (unsigned char flags_);
         void reset_flags (unsigned char flags_);
+        int64_t fd ();
+        void set_fd (int64_t fd_);
+        metadata_t *metadata () const;
+        void set_metadata (metadata_t *metadata_);
+        void reset_metadata ();
         bool is_identity () const;
-        bool is_delimiter ();
+        bool is_credential () const;
+        bool is_delimiter () const;
         bool is_vsm ();
         bool is_cmsg ();
+        uint32_t get_routing_id();
+        int set_routing_id(uint32_t routing_id_);
 
         //  After calling this function you can copy the message in POD-style
         //  refs_ times. No need to call copy.
@@ -84,7 +94,8 @@ namespace zmq
 
         //  Size in bytes of the largest message that is still copied around
         //  rather than being reference-counted.
-        enum {max_vsm_size = 29};
+        enum { msg_t_size = 64 };
+        enum { max_vsm_size = msg_t_size - (8 + sizeof (metadata_t *) + 3 + sizeof(uint32_t)) };
 
         //  Shared message buffer. Message data are either allocated in one
         //  continuous block along with this structure - thus avoiding one
@@ -117,40 +128,53 @@ namespace zmq
             type_max = 104
         };
 
+        // the file descriptor where this message originated, needs to be 64bit due to alignment
+        int64_t file_desc;
+
         //  Note that fields shared between different message types are not
-        //  moved to tha parent class (msg_t). This way we ger tighter packing
+        //  moved to tha parent class (msg_t). This way we get tighter packing
         //  of the data. Shared fields can be accessed via 'base' member of
         //  the union.
         union {
             struct {
-                unsigned char unused [max_vsm_size + 1];
+                metadata_t *metadata;
+                unsigned char unused [msg_t_size - (8 + sizeof (metadata_t *) + 2 + sizeof(uint32_t))];
                 unsigned char type;
                 unsigned char flags;
+                uint32_t routing_id;
             } base;
             struct {
+                metadata_t *metadata;
                 unsigned char data [max_vsm_size];
                 unsigned char size;
                 unsigned char type;
                 unsigned char flags;
+                uint32_t routing_id;
             } vsm;
             struct {
+                metadata_t *metadata;
                 content_t *content;
-                unsigned char unused [max_vsm_size + 1 - sizeof (content_t*)];
+                unsigned char unused [msg_t_size - (8 + sizeof (metadata_t *) + sizeof (content_t*) + 2 + sizeof(uint32_t))];
                 unsigned char type;
                 unsigned char flags;
+                uint32_t routing_id;
             } lmsg;
             struct {
+                metadata_t *metadata;
                 void* data;
                 size_t size;
                 unsigned char unused
-                    [max_vsm_size + 1 - sizeof (void*) - sizeof (size_t)];
+                    [msg_t_size - (8 + sizeof (metadata_t *) + sizeof (void*) + sizeof (size_t) + 2 + sizeof(uint32_t))];
                 unsigned char type;
                 unsigned char flags;
+                uint32_t routing_id;
             } cmsg;
             struct {
-                unsigned char unused [max_vsm_size + 1];
+                metadata_t *metadata;
+                unsigned char unused [msg_t_size - (8 + sizeof (metadata_t *) + 2 + sizeof(uint32_t))];
                 unsigned char type;
                 unsigned char flags;
+                uint32_t routing_id;
             } delimiter;
         } u;
     };

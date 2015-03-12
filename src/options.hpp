@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -22,11 +22,16 @@
 
 #include <string>
 #include <vector>
+#include <set>
 
 #include "stddef.h"
 #include "stdint.hpp"
 #include "tcp_address.hpp"
 #include "../include/zmq.h"
+
+#if defined ZMQ_HAVE_SO_PEERCRED || defined ZMQ_HAVE_LOCAL_PEERCRED
+#include <sys/types.h>
+#endif
 
 //  Normal base 256 key is 32 bytes
 #define CURVE_KEYSIZE       32
@@ -66,6 +71,9 @@ namespace zmq
         int sndbuf;
         int rcvbuf;
 
+        // Type of service (containing DSCP and ECN socket options)
+        int tos;
+
         //  Socket type.
         int type;
 
@@ -100,11 +108,20 @@ namespace zmq
         //  If 1, (X)SUB socket should filter the messages. If 0, it should not.
         bool filter;
 
+        //  If true, the subscription matching on (X)PUB and (X)SUB sockets
+        //  is reversed. Messages are sent to and received by non-matching
+        //  sockets.
+        bool invert_matching;
+
         //  If true, the identity message is forwarded to the socket.
         bool recv_identity;
 
         // if true, router socket accepts non-zmq tcp connections
-        bool raw_sock;
+        bool raw_socket;
+        bool raw_notify;        //  Provide connect notifications
+
+        //  Addres of SOCKS proxy
+        std::string socks_proxy_address;
 
         //  TCP keep-alive settings.
         //  Defaults to -1 = do not change socket options
@@ -116,6 +133,19 @@ namespace zmq
         // TCP accept() filters
         typedef std::vector <tcp_address_mask_t> tcp_accept_filters_t;
         tcp_accept_filters_t tcp_accept_filters;
+
+        // IPC accept() filters
+#       if defined ZMQ_HAVE_SO_PEERCRED || defined ZMQ_HAVE_LOCAL_PEERCRED
+        bool zap_ipc_creds;
+        typedef std::set <uid_t> ipc_uid_accept_filters_t;
+        ipc_uid_accept_filters_t ipc_uid_accept_filters;
+        typedef std::set <gid_t> ipc_gid_accept_filters_t;
+        ipc_gid_accept_filters_t ipc_gid_accept_filters;
+#       endif
+#       if defined ZMQ_HAVE_SO_PEERCRED
+        typedef std::set <pid_t> ipc_pid_accept_filters_t;
+        ipc_pid_accept_filters_t ipc_pid_accept_filters;
+#       endif
 
         //  Security mechanism for all connections on this socket
         int mechanism;
@@ -135,6 +165,13 @@ namespace zmq
         uint8_t curve_secret_key [CURVE_KEYSIZE];
         uint8_t curve_server_key [CURVE_KEYSIZE];
 
+        //  Principals for GSSAPI mechanism
+        std::string gss_principal;
+        std::string gss_service_principal;
+
+        //  If true, gss encryption will be disabled
+        bool gss_plaintext;
+
         //  ID of the socket.
         int socket_id;
 
@@ -143,6 +180,11 @@ namespace zmq
         //  Cannot receive multi-part messages.
         //  Ignores hwm
         bool conflate;
+
+        //  If connection handshake is not done after this many milliseconds,
+        //  close socket.  Default is 30 secs.  0 means no handshake timeout.
+        int handshake_ivl;
+
     };
 }
 

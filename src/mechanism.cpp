@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -47,12 +47,25 @@ void zmq::mechanism_t::peer_identity (msg_t *msg_)
     msg_->set_flags (msg_t::identity);
 }
 
+void zmq::mechanism_t::set_user_id (const void *data_, size_t size_)
+{
+    user_id = blob_t (static_cast <const unsigned char*> (data_), size_);
+    zap_properties.insert (
+        metadata_t::dict_t::value_type (
+            "User-Id", std::string ((char *) data_, size_)));
+}
+
+zmq::blob_t zmq::mechanism_t::get_user_id () const
+{
+    return user_id;
+}
+
 const char *zmq::mechanism_t::socket_type_string (int socket_type) const
 {
     static const char *names [] = {"PAIR", "PUB", "SUB", "REQ", "REP",
                                    "DEALER", "ROUTER", "PULL", "PUSH",
-                                   "XPUB", "XSUB", "STREAM"};
-    zmq_assert (socket_type >= 0 && socket_type <= 10);
+                                   "XPUB", "XSUB", "STREAM", "SERVER", "CLIENT"};
+    zmq_assert (socket_type >= 0 && socket_type <= 13);
     return names [socket_type];
 }
 
@@ -73,7 +86,7 @@ size_t zmq::mechanism_t::add_property (unsigned char *ptr, const char *name,
 }
 
 int zmq::mechanism_t::parse_metadata (const unsigned char *ptr_,
-                                      size_t length_)
+                                      size_t length_, bool zap_flag)
 {
     size_t bytes_left = length_;
 
@@ -115,6 +128,14 @@ int zmq::mechanism_t::parse_metadata (const unsigned char *ptr_,
             if (rc == -1)
                 return -1;
         }
+        if (zap_flag)
+            zap_properties.insert (
+                metadata_t::dict_t::value_type (
+                    name, std::string ((char *) value, value_length)));
+        else
+            zmtp_properties.insert (
+                metadata_t::dict_t::value_type (
+                    name, std::string ((char *) value, value_length)));
     }
     if (bytes_left > 0) {
         errno = EPROTO;
@@ -123,15 +144,15 @@ int zmq::mechanism_t::parse_metadata (const unsigned char *ptr_,
     return 0;
 }
 
-int zmq::mechanism_t::property (const std::string name_,
-                                const void *value_, size_t length_)
+int zmq::mechanism_t::property (const std::string& /* name_ */,
+                                const void * /* value_ */, size_t /* length_ */)
 {
     //  Default implementation does not check
     //  property values and returns 0 to signal success.
     return 0;
 }
 
-bool zmq::mechanism_t::check_socket_type (const std::string type_) const
+bool zmq::mechanism_t::check_socket_type (const std::string& type_) const
 {
     switch (options.type) {
         case ZMQ_REQ:
@@ -156,6 +177,10 @@ bool zmq::mechanism_t::check_socket_type (const std::string type_) const
             return type_ == "PUB" || type_ == "XPUB";
         case ZMQ_PAIR:
             return type_ == "PAIR";
+        case ZMQ_SERVER:
+            return type_ == "CLIENT";
+        case ZMQ_CLIENT:
+            return type_ == "CLIENT" || type_ == "SERVER";
         default:
             break;
     }

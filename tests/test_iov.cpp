@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -80,7 +80,7 @@ int main (void)
     rc = zmq_bind (sb, "inproc://a");
     assert (rc == 0);
 
-    zmq_sleep(1);
+    msleep (SETTLE_TIME);
     void *sc = zmq_socket (ctx, ZMQ_PUSH);
   
     rc = zmq_connect (sc, "inproc://a");

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -26,6 +26,7 @@
 
 #include <vector>
 
+#include "ctx.hpp"
 #include "fd.hpp"
 #include "thread.hpp"
 #include "poller_base.hpp"
@@ -43,7 +44,7 @@ namespace zmq
 
         typedef fd_t handle_t;
 
-        devpoll_t ();
+        devpoll_t (const ctx_t &ctx_);
         ~devpoll_t ();
 
         //  "poller" concept.
@@ -56,6 +57,8 @@ namespace zmq
         void start ();
         void stop ();
 
+        static int max_fds ();
+
     private:
 
         //  Main worker thread routine.
@@ -63,6 +66,9 @@ namespace zmq
 
         //  Main event loop.
         void loop ();
+
+        // Reference to ZMQ context.
+        const ctx_t &ctx;
 
         //  File descriptor referring to "/dev/poll" pseudo-device.
         fd_t devpoll_fd;

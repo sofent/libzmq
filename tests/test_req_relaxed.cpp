@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -44,7 +44,7 @@ int main (void)
         rep [peer] = zmq_socket (ctx, ZMQ_REP);
         assert (rep [peer]);
 
-        int timeout = 100;
+        int timeout = 250;
         rc = zmq_setsockopt (rep [peer], ZMQ_RCVTIMEO, &timeout, sizeof (int));
         assert (rc == 0);
 
@@ -54,7 +54,7 @@ int main (void)
     //  We have to give the connects time to finish otherwise the requests
     //  will not properly round-robin. We could alternatively connect the
     //  REQ sockets to the REP sockets.
-    zmq_sleep(1);
+    msleep (SETTLE_TIME);
 
     //  Case 1: Second send() before a reply arrives in a pipe.
 

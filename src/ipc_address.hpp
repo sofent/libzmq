@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -41,7 +41,7 @@ namespace zmq
         ~ipc_address_t ();
 
         //  This function sets up the address for UNIX domain transport.
-        int resolve (const char* path_);
+        int resolve (const char *path_);
 
         //  The opposite to resolve()
         int to_string (std::string &addr_);
@@ -56,7 +56,7 @@ namespace zmq
         ipc_address_t (const ipc_address_t&);
         const ipc_address_t &operator = (const ipc_address_t&);
     };
-    
+
 }
 
 #endif

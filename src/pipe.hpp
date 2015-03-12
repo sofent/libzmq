@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -68,15 +68,21 @@ namespace zmq
         //  This allows pipepair to create pipe objects.
         friend int pipepair (zmq::object_t *parents_ [2], zmq::pipe_t* pipes_ [2],
             int hwms_ [2], bool conflate_ [2]);
-            
+
     public:
 
         //  Specifies the object to send events to.
         void set_event_sink (i_pipe_events *sink_);
 
+        //  Pipe endpoint can store an routing ID to be used by its clients.        
+        void set_routing_id(uint32_t routing_id_);
+        uint32_t get_routing_id();
+
         //  Pipe endpoint can store an opaque ID to be used by its clients.
         void set_identity (const blob_t &identity_);
         blob_t get_identity ();
+
+        blob_t get_credential () const;
 
         //  Returns true if there is at least one message to read in the pipe.
         bool check_read ();
@@ -84,25 +90,27 @@ namespace zmq
         //  Reads a message to the underlying pipe.
         bool read (msg_t *msg_);
 
-        //  Checks whether messages can be written to the pipe. If writing
-        //  the message would cause high watermark the function returns false.
+        //  Checks whether messages can be written to the pipe. If the pipe is
+        //  closed or if writing the message would cause high watermark the
+        //  function returns false.
         bool check_write ();
 
         //  Writes a message to the underlying pipe. Returns false if the
-        //  message cannot be written because high watermark was reached.
+        //  message does not pass check_write. If false, the message object
+        //  retains ownership of its message buffer.
         bool write (msg_t *msg_);
 
         //  Remove unfinished parts of the outbound message from the pipe.
         void rollback ();
 
-        //  Flush the messages downsteam.
+        //  Flush the messages downstream.
         void flush ();
 
-        //  Temporaraily disconnects the inbound message stream and drops
+        //  Temporarily disconnects the inbound message stream and drops
         //  all the messages on the fly. Causes 'hiccuped' event to be generated
         //  in the peer.
         void hiccup ();
-        
+
         // Ensure the pipe wont block on receiving pipe_term.
         void set_nodelay ();
 
@@ -115,10 +123,12 @@ namespace zmq
         // set the high water marks.
         void set_hwms (int inhwm_, int outhwm_);
 
+        // check HWM
+        bool check_hwm () const;
     private:
 
         //  Type of the underlying lock-free pipe.
-        typedef ypipe_base_t <msg_t, message_pipe_granularity> upipe_t;
+        typedef ypipe_base_t <msg_t> upipe_t;
 
         //  Command handlers.
         void process_activate_read ();
@@ -174,7 +184,7 @@ namespace zmq
         //  active: common state before any termination begins,
         //  delimiter_received: delimiter was read from pipe before
         //      term command was received,
-        //  waiting_fo_delimiter: term command was already received
+        //  waiting_for_delimiter: term command was already received
         //      from the peer but there are still pending messages to read,
         //  term_ack_sent: all pending messages were already read and
         //      all we are waiting for is ack from the peer,
@@ -198,13 +208,19 @@ namespace zmq
         //  Identity of the writer. Used uniquely by the reader side.
         blob_t identity;
 
+        //  Identity of the writer. Used uniquely by the reader side.
+        int routing_id;
+
+        //  Pipe's credential.
+        blob_t credential;
+
         //  Returns true if the message is delimiter; false otherwise.
-        static bool is_delimiter (msg_t &msg_);
+        static bool is_delimiter (const msg_t &msg_);
 
         //  Computes appropriate low watermark from the given high watermark.
         static int compute_lwm (int hwm_);
 
-        bool conflate;
+        const bool conflate;
 
         //  Disable copying.
         pipe_t (const pipe_t&);

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -30,14 +30,18 @@ int main (void)
 
     int rc = zmq_connect (sock, "tcp://localhost:1234");
     assert (rc == 0);
-
+    
     rc = zmq_connect (sock, "tcp://localhost:invalid");
     assert (rc == -1);
-    assert (errno == EINVAL);
 
     rc = zmq_connect (sock, "tcp://in val id:1234");
     assert (rc == -1);
-    assert (errno == EINVAL);
+    
+    rc = zmq_connect (sock, "tcp://");
+    assert (rc == -1);
+    
+    rc = zmq_connect (sock, "tcp://192.168.0.200:*");
+    assert (rc == -1);
 
     rc = zmq_connect (sock, "invalid://localhost:1234");
     assert (rc == -1);

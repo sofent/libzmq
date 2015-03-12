@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -21,18 +21,26 @@
 #define __TESTUTIL_HPP_INCLUDED__
 
 #include "../include/zmq.h"
-#include "../include/zmq_utils.h"
+#include "../src/stdint.hpp"
 #include "platform.hpp"
+
+//  This defines the settle time used in tests; raise this if we
+//  get test failures on slower systems due to binds/connects not
+//  settled. Tested to work reliably at 1 msec on a fast PC.
+#define SETTLE_TIME 50         //  In msec
 
 #undef NDEBUG
 #include <time.h>
 #include <assert.h>
 #include <stdarg.h>
 #include <string>
+#include <string.h>
 
 #if defined _WIN32
-#   include <crtdbg.h>
-#   pragma warning(disable:4996)
+#   if defined _MSC_VER
+#       include <crtdbg.h>
+#       pragma warning(disable:4996)
+#   endif
 #else
 #   include <unistd.h>
 #   include <signal.h>
@@ -104,15 +112,17 @@ expect_bounce_fail (void *server, void *client)
 {
     const char *content = "12345678ABCDEFGH12345678abcdefgh";
     char buffer [32];
+    int timeout = 250;
 
     //  Send message from client to server
-    int rc = zmq_send (client, content, 32, ZMQ_SNDMORE);
-    assert (rc == 32);
+    int rc = zmq_setsockopt (client, ZMQ_SNDTIMEO, &timeout, sizeof (int));
+    assert (rc == 0);
+    rc = zmq_send (client, content, 32, ZMQ_SNDMORE);
+    assert ((rc == 32) || ((rc == -1) && (errno == EAGAIN)));
     rc = zmq_send (client, content, 32, 0);
-    assert (rc == 32);
+    assert ((rc == 32) || ((rc == -1) && (errno == EAGAIN)));
 
     //  Receive message at server side (should not succeed)
-    int timeout = 150;
     rc = zmq_setsockopt (server, ZMQ_RCVTIMEO, &timeout, sizeof (int));
     assert (rc == 0);
     rc = zmq_recv (server, buffer, 32, 0);
@@ -120,10 +130,13 @@ expect_bounce_fail (void *server, void *client)
     assert (zmq_errno () == EAGAIN);
 
     //  Send message from server to client to test other direction
+    //  If connection failed, send may block, without a timeout
+    rc = zmq_setsockopt (server, ZMQ_SNDTIMEO, &timeout, sizeof (int));
+    assert (rc == 0);
     rc = zmq_send (server, content, 32, ZMQ_SNDMORE);
-    assert (rc == 32);
+    assert (rc == 32 || (rc == -1 && zmq_errno () == EAGAIN));
     rc = zmq_send (server, content, 32, 0);
-    assert (rc == 32);
+    assert (rc == 32 || (rc == -1 && zmq_errno () == EAGAIN));
 
     //  Receive message at client side (should not succeed)
     rc = zmq_setsockopt (client, ZMQ_RCVTIMEO, &timeout, sizeof (int));
@@ -236,7 +249,7 @@ void s_recv_seq (void *socket, ...)
 }
 
 
-// Sets a zero linger period on a socket and closes it.
+//  Sets a zero linger period on a socket and closes it.
 void close_zero_linger (void *socket)
 {
     int linger = 0;
@@ -249,10 +262,37 @@ void close_zero_linger (void *socket)
 void setup_test_environment()
 {
 #if defined _WIN32
+#   if defined _MSC_VER
     _set_abort_behavior( 0, _WRITE_ABORT_MSG);
     _CrtSetReportMode( _CRT_ASSERT, _CRTDBG_MODE_FILE );
     _CrtSetReportFile( _CRT_ASSERT, _CRTDBG_FILE_STDERR );
+#   endif
+#else
+#if defined ZMQ_HAVE_CYGWIN
+    // abort test after 121 seconds
+    alarm(121);
+#else
+    // abort test after 60 seconds
+    alarm(60);
+#endif
+#endif
+#if defined __MVS__
+    // z/OS UNIX System Services: Ignore SIGPIPE during test runs, as a
+    // workaround for no SO_NOGSIGPIPE socket option.
+    signal(SIGPIPE, SIG_IGN);
 #endif
 }
+
+//  Provide portable millisecond sleep
+// http://www.cplusplus.com/forum/unices/60161/    http://en.cppreference.com/w/cpp/thread/sleep_for
+void msleep (int milliseconds)
+{
+#ifdef ZMQ_HAVE_WINDOWS
+    Sleep (milliseconds);
+#else
+    usleep (static_cast <useconds_t> (milliseconds) * 1000);
+#endif
+}
+
 
 #endif

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -32,7 +32,8 @@
 #include "config.hpp"
 #include "i_poll_events.hpp"
 
-zmq::epoll_t::epoll_t () :
+zmq::epoll_t::epoll_t (const zmq::ctx_t &ctx_) :
+    ctx(ctx_),
     stopping (false)
 {
     epoll_fd = epoll_create (1);
@@ -118,12 +119,17 @@ void zmq::epoll_t::reset_pollout (handle_t handle_)
 
 void zmq::epoll_t::start ()
 {
-    worker.start (worker_routine, this);
+    ctx.start_thread (worker, worker_routine, this);
 }
 
 void zmq::epoll_t::stop ()
 {
     stopping = true;
+}
+
+int zmq::epoll_t::max_fds ()
+{
+    return -1;
 }
 
 void zmq::epoll_t::loop ()

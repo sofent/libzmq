@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -27,6 +27,7 @@
 #include "io_object.hpp"
 #include "pipe.hpp"
 #include "socket_base.hpp"
+#include "stream_engine.hpp"
 
 namespace zmq
 {
@@ -46,8 +47,8 @@ namespace zmq
 
         //  Create a session of the particular type.
         static session_base_t *create (zmq::io_thread_t *io_thread_,
-            bool connect_, zmq::socket_base_t *socket_,
-            const options_t &options_, const address_t *addr_);
+            bool active_, zmq::socket_base_t *socket_,
+            const options_t &options_, address_t *addr_);
 
         //  To be used once only, when creating the session.
         void attach_pipe (zmq::pipe_t *pipe_);
@@ -55,7 +56,7 @@ namespace zmq
         //  Following functions are the interface exposed towards the engine.
         virtual void reset ();
         void flush ();
-        void detach ();
+        void engine_error (zmq::stream_engine_t::error_reason_t reason);
 
         //  i_pipe_events interface implementation.
         void read_activated (zmq::pipe_t *pipe_);
@@ -68,6 +69,7 @@ namespace zmq
         int push_msg (msg_t *msg_);
 
         int zap_connect ();
+        bool zap_enabled ();
 
         //  Fetches a message. Returns 0 if successful; -1 otherwise.
         //  The caller is responsible for freeing the message when no
@@ -88,16 +90,16 @@ namespace zmq
 
     protected:
 
-        session_base_t (zmq::io_thread_t *io_thread_, bool connect_,
+        session_base_t (zmq::io_thread_t *io_thread_, bool active_,
             zmq::socket_base_t *socket_, const options_t &options_,
-            const address_t *addr_);
+            address_t *addr_);
         virtual ~session_base_t ();
 
     private:
 
         void start_connecting (bool wait_);
 
-        void detached ();
+        void reconnect ();
 
         //  Handlers for incoming commands.
         void process_plug ();
@@ -111,12 +113,9 @@ namespace zmq
         //  Call this function when engine disconnect to get rid of leftovers.
         void clean_pipes ();
 
-        //  Call this function to move on with the delayed process_term.
-        void proceed_with_term ();
-
         //  If true, this session (re)connects to the peer. Otherwise, it's
         //  a transient session created by the listener.
-        bool connect;
+        const bool active;
 
         //  Pipe connecting the session to its socket.
         zmq::pipe_t *pipe;
@@ -152,7 +151,7 @@ namespace zmq
         bool has_linger_timer;
 
         //  Protocol and address to use when connecting.
-        const address_t *addr;
+        address_t *addr;
 
         session_base_t (const session_base_t&);
         const session_base_t &operator = (const session_base_t&);

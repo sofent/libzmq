@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -41,7 +41,7 @@ namespace zmq
         signaler_t ();
         ~signaler_t ();
 
-        fd_t get_fd ();
+        fd_t get_fd () const;
         void send ();
         int wait (int timeout_);
         void recv ();
@@ -49,7 +49,7 @@ namespace zmq
 #ifdef HAVE_FORK
         // close the file descriptors in a forked child process so that they
         // do not interfere with the context in the parent process.
-        void forked();
+        void forked ();
 #endif
 
     private:
@@ -58,7 +58,8 @@ namespace zmq
         //  to pass the signals.
         static int make_fdpair (fd_t *r_, fd_t *w_);
 
-        //  Underlying write & read file descriptor.
+        //  Underlying write & read file descriptor
+        //  Will be -1 if we exceeded number of available handles
         fd_t w;
         fd_t r;
 
@@ -71,10 +72,9 @@ namespace zmq
         pid_t pid;
         // idempotent close of file descriptors that is safe to use by destructor
         // and forked().
-        void close_internal();
+        void close_internal ();
 #endif
     };
-
 }
 
 #endif

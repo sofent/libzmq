@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -17,6 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <limits>
 #include "testutil.hpp"
 
 int main (void)
@@ -29,22 +30,39 @@ int main (void)
     assert (ctx);
     
     assert (zmq_ctx_get (ctx, ZMQ_MAX_SOCKETS) == ZMQ_MAX_SOCKETS_DFLT);
+#if defined(ZMQ_USE_SELECT)
+    assert (zmq_ctx_get (ctx, ZMQ_SOCKET_LIMIT) == FD_SETSIZE - 1);
+#elif    defined(ZMQ_USE_POLL) || defined(ZMQ_USE_EPOLL)     \
+      || defined(ZMQ_USE_DEVPOLL) || defined(ZMQ_USE_KQUEUE)
+    assert (zmq_ctx_get (ctx, ZMQ_SOCKET_LIMIT) == 65535);
+#endif
     assert (zmq_ctx_get (ctx, ZMQ_IO_THREADS) == ZMQ_IO_THREADS_DFLT);
     assert (zmq_ctx_get (ctx, ZMQ_IPV6) == 0);
     
     rc = zmq_ctx_set (ctx, ZMQ_IPV6, true);
-    assert (zmq_ctx_get (ctx, ZMQ_IPV6) == true);
+    assert (zmq_ctx_get (ctx, ZMQ_IPV6) == 1);
     
     void *router = zmq_socket (ctx, ZMQ_ROUTER);
-    int ipv6;
+    int value;
     size_t optsize = sizeof (int);
-    rc = zmq_getsockopt (router, ZMQ_IPV6, &ipv6, &optsize);
+    rc = zmq_getsockopt (router, ZMQ_IPV6, &value, &optsize);
     assert (rc == 0);
-    assert (ipv6);
-
+    assert (value == 1);
+    rc = zmq_getsockopt (router, ZMQ_LINGER, &value, &optsize);
+    assert (rc == 0);
+    assert (value == -1);
     rc = zmq_close (router);
     assert (rc == 0);
     
+    rc = zmq_ctx_set (ctx, ZMQ_BLOCKY, false);
+    assert (zmq_ctx_get (ctx, ZMQ_BLOCKY) == 0);
+    router = zmq_socket (ctx, ZMQ_ROUTER);
+    rc = zmq_getsockopt (router, ZMQ_LINGER, &value, &optsize);
+    assert (rc == 0);
+    assert (value == 0);
+    rc = zmq_close (router);
+    assert (rc == 0);
+
     rc = zmq_ctx_term (ctx);
     assert (rc == 0);
 

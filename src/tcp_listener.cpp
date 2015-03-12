@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -20,6 +20,7 @@
 #include <new>
 
 #include <string>
+#include <stdio.h>
 
 #include "platform.hpp"
 #include "tcp_listener.hpp"
@@ -90,6 +91,9 @@ void zmq::tcp_listener_t::in_event ()
     tune_tcp_socket (fd);
     tune_tcp_keepalives (fd, options.tcp_keepalive, options.tcp_keepalive_cnt, options.tcp_keepalive_idle, options.tcp_keepalive_intvl);
 
+    // remember our fd for ZMQ_SRCFD in messages
+    socket->set_fd(fd);
+
     //  Create the engine object for this connection.
     stream_engine_t *engine = new (std::nothrow)
         stream_engine_t (fd, options, endpoint);
@@ -100,7 +104,7 @@ void zmq::tcp_listener_t::in_event ()
     io_thread_t *io_thread = choose_io_thread (options.affinity);
     zmq_assert (io_thread);
 
-    //  Create and launch a session object. 
+    //  Create and launch a session object.
     session_base_t *session = session_base_t::create (io_thread, false, socket,
         options, NULL);
     errno_assert (session);
@@ -188,6 +192,10 @@ int zmq::tcp_listener_t::set_address (const char *addr_)
     if (address.family () == AF_INET6)
         enable_ipv4_mapping (s);
 
+    // Set the IP Type-Of-Service for the underlying socket
+    if (options.tos != 0)
+        set_ip_type_of_service (s, options.tos);
+
     //  Set the socket buffer limits for the underlying socket.
     if (options.sndbuf != 0)
         set_tcp_send_buffer (s, options.sndbuf);
@@ -219,7 +227,7 @@ int zmq::tcp_listener_t::set_address (const char *addr_)
         goto error;
 #endif
 
-    //  Listen for incomming connections.
+    //  Listen for incoming connections.
     rc = listen (s, options.backlog);
 #ifdef ZMQ_HAVE_WINDOWS
     if (rc == SOCKET_ERROR) {
@@ -280,6 +288,13 @@ zmq::fd_t zmq::tcp_listener_t::accept ()
     }
 #endif
 
+    //  Race condition can cause socket not to be closed (if fork happens
+    //  between accept and this point).
+#ifdef FD_CLOEXEC
+    int rc = fcntl (sock, F_SETFD, FD_CLOEXEC);
+    errno_assert (rc != -1);
+#endif
+
     if (!options.tcp_accept_filters.empty ()) {
         bool matched = false;
         for (options_t::tcp_accept_filters_t::size_type i = 0; i != options.tcp_accept_filters.size (); ++i) {
@@ -299,6 +314,10 @@ zmq::fd_t zmq::tcp_listener_t::accept ()
             return retired_fd;
         }
     }
+
+    // Set the IP Type-Of-Service priority for this client socket
+    if (options.tos != 0)
+        set_ip_type_of_service (sock, options.tos);
 
     return sock;
 }

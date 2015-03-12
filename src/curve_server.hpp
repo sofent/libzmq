@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -23,8 +23,12 @@
 #include "platform.hpp"
 
 #ifdef HAVE_LIBSODIUM
-#include <sodium.h>
-
+#ifdef HAVE_TWEETNACL
+#include "tweetnacl_base.h"
+#include "randombytes.h"
+#else
+#include "sodium.h"
+#endif
 #if crypto_box_NONCEBYTES != 24 \
 ||  crypto_box_PUBLICKEYBYTES != 32 \
 ||  crypto_box_SECRETKEYBYTES != 32 \
@@ -60,7 +64,7 @@ namespace zmq
         virtual int encode (msg_t *msg_);
         virtual int decode (msg_t *msg_);
         virtual int zap_msg_available ();
-        virtual bool is_handshake_complete () const;
+        virtual status_t status () const;
 
     private:
 
@@ -70,6 +74,8 @@ namespace zmq
             expect_initiate,
             expect_zap_reply,
             send_ready,
+            send_error,
+            error_sent,
             connected
         };
 
@@ -80,10 +86,11 @@ namespace zmq
         //  Current FSM state
         state_t state;
 
-        //  True iff we are awaiting reply from ZAP handler.
-        bool expecting_zap_reply;
+        //  Status code as received from ZAP handler
+        std::string status_code;
 
         uint64_t cn_nonce;
+        uint64_t cn_peer_nonce;
 
         //  Our secret key (s)
         uint8_t secret_key [crypto_box_SECRETKEYBYTES];
@@ -107,9 +114,11 @@ namespace zmq
         int produce_welcome (msg_t *msg_);
         int process_initiate (msg_t *msg_);
         int produce_ready (msg_t *msg_);
+        int produce_error (msg_t *msg_) const;
 
         void send_zap_request (const uint8_t *key);
         int receive_and_process_zap_reply ();
+        mutex_t sync;
     };
 
 }
@@ -117,4 +126,3 @@ namespace zmq
 #endif
 
 #endif
-

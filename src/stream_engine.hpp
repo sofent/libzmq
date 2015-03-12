@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -30,6 +30,7 @@
 #include "options.hpp"
 #include "socket_base.hpp"
 #include "../include/zmq.h"
+#include "metadata.hpp"
 
 namespace zmq
 {
@@ -52,7 +53,13 @@ namespace zmq
     {
     public:
 
-        stream_engine_t (fd_t fd_, const options_t &options_, 
+        enum error_reason_t {
+            protocol_error,
+            connection_error,
+            timeout_error
+        };
+
+        stream_engine_t (fd_t fd_, const options_t &options_,
                          const std::string &endpoint);
         ~stream_engine_t ();
 
@@ -60,21 +67,21 @@ namespace zmq
         void plug (zmq::io_thread_t *io_thread_,
            zmq::session_base_t *session_);
         void terminate ();
-        void activate_in ();
-        void activate_out ();
+        void restart_input ();
+        void restart_output ();
         void zap_msg_available ();
 
         //  i_poll_events interface implementation.
         void in_event ();
         void out_event ();
+        void timer_event (int id_);
 
     private:
-
         //  Unplug the engine from the session.
         void unplug ();
 
         //  Function to handle network disconnections.
-        void error ();
+        void error (error_reason_t reason);
 
         //  Receives the greeting message from the peer.
         int receive_greeting ();
@@ -82,19 +89,8 @@ namespace zmq
         //  Detects the protocol used by the peer.
         bool handshake ();
 
-        //  Writes data to the socket. Returns the number of bytes actually
-        //  written (even zero is to be considered to be a success). In case
-        //  of error or orderly shutdown by the other peer -1 is returned.
-        int write (const void *data_, size_t size_);
-
-        //  Reads data from the socket (up to 'size' bytes). Returns the number
-        //  of bytes actually read (even zero is to be considered to be
-        //  a success). In case of error or orderly shutdown by the other
-        //  peer -1 is returned.
-        int read (void *data_, size_t size_);
-
-        int read_identity (msg_t *msg_);
-        int write_identity (msg_t *msg_);
+        int identity_msg (msg_t *msg_);
+        int process_identity_msg (msg_t *msg_);
 
         int next_handshake_command (msg_t *msg);
         int process_handshake_command (msg_t *msg);
@@ -102,6 +98,9 @@ namespace zmq
         int pull_msg_from_session (msg_t *msg_);
         int push_msg_to_session (msg_t *msg);
 
+        int push_raw_msg_to_session (msg_t *msg);
+
+        int write_credential (msg_t *msg_);
         int pull_and_encode (msg_t *msg_);
         int decode_and_push (msg_t *msg_);
         int push_one_then_decode_and_push (msg_t *msg_);
@@ -112,6 +111,11 @@ namespace zmq
 
         size_t add_property (unsigned char *ptr,
             const char *name, const void *value, size_t value_len);
+
+        void set_handshake_timer();
+
+        typedef metadata_t::dict_t properties_t;
+        bool init_properties (properties_t & properties);
 
         //  Underlying socket.
         fd_t s;
@@ -130,6 +134,9 @@ namespace zmq
         unsigned char *outpos;
         size_t outsize;
         i_encoder *encoder;
+
+        //  Metadata to be attached to received messages. May be NULL.
+        metadata_t *metadata;
 
         //  When true, we are still trying to determine whether
         //  the peer is using versioned protocol, and if so, which
@@ -163,11 +170,10 @@ namespace zmq
         std::string endpoint;
 
         bool plugged;
-        bool terminating;
 
-        int (stream_engine_t::*read_msg) (msg_t *msg_);
+        int (stream_engine_t::*next_msg) (msg_t *msg_);
 
-        int (stream_engine_t::*write_msg) (msg_t *msg_);
+        int (stream_engine_t::*process_msg) (msg_t *msg_);
 
         bool io_error;
 
@@ -179,10 +185,16 @@ namespace zmq
         mechanism_t *mechanism;
 
         //  True iff the engine couldn't consume the last decoded message.
-        bool input_paused;
+        bool input_stopped;
 
         //  True iff the engine doesn't have any message to encode.
-        bool output_paused;
+        bool output_stopped;
+
+        //  ID of the handshake timer
+        enum {handshake_timer_id = 0x40};
+
+        //  True is linger timer is running.
+        bool has_handshake_timer;
 
         // Socket
         zmq::socket_base_t *socket;

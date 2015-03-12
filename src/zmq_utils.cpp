@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -22,6 +22,8 @@
 #include "clock.hpp"
 #include "err.hpp"
 #include "thread.hpp"
+#include "atomic_counter.hpp"
+#include "atomic_ptr.hpp"
 #include <assert.h>
 #include "../include/zmq_utils.h"
 
@@ -30,6 +32,15 @@
 #else
 #include "windows.hpp"
 #endif
+
+#ifdef HAVE_LIBSODIUM
+#ifdef HAVE_TWEETNACL
+#include "tweetnacl_base.h"
+#else
+#include "sodium.h"
+#endif
+#endif
+
 
 void zmq_sleep (int seconds_)
 {
@@ -100,10 +111,14 @@ static uint8_t decoder [96] = {
 //  Encode a binary frame as a string; destination string MUST be at least
 //  size * 5 / 4 bytes long plus 1 byte for the null terminator. Returns
 //  dest. Size must be a multiple of 4.
+//  Returns NULL and sets errno = EINVAL for invalid input.
 
-char *zmq_z85_encode (char *dest, uint8_t *data, size_t size)
+char *zmq_z85_encode (char *dest, const uint8_t *data, size_t size)
 {
-    assert (size % 4 == 0);
+    if (size % 4 != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
     unsigned int char_nbr = 0;
     unsigned int byte_nbr = 0;
     uint32_t value = 0;
@@ -125,19 +140,24 @@ char *zmq_z85_encode (char *dest, uint8_t *data, size_t size)
     return dest;
 }
 
-    
+
 //  --------------------------------------------------------------------------
 //  Decode an encoded string into a binary frame; dest must be at least
 //  strlen (string) * 4 / 5 bytes long. Returns dest. strlen (string) 
 //  must be a multiple of 5.
+//  Returns NULL and sets errno = EINVAL for invalid input.
 
-uint8_t *zmq_z85_decode (uint8_t *dest, char *string)
+uint8_t *zmq_z85_decode (uint8_t *dest, const char *string)
 {
-    assert (strlen (string) % 5 == 0);
+    if (strlen (string) % 5 != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
     unsigned int byte_nbr = 0;
     unsigned int char_nbr = 0;
+    unsigned int string_len = strlen (string);
     uint32_t value = 0;
-    while (char_nbr < strlen (string)) {
+    while (char_nbr < string_len) {
         //  Accumulate value in base 85
         value = value * 85 + decoder [(uint8_t) string [char_nbr++] - 32];
         if (char_nbr % 5 == 0) {
@@ -152,4 +172,85 @@ uint8_t *zmq_z85_decode (uint8_t *dest, char *string)
     }
     assert (byte_nbr == strlen (string) * 4 / 5);
     return dest;
+}
+
+//  --------------------------------------------------------------------------
+//  Generate a public/private keypair with libsodium.
+//  Generated keys will be 40 byte z85-encoded strings.
+//  Returns 0 on success, -1 on failure, setting errno.
+//  Sets errno = ENOTSUP in the absence of libsodium.
+
+int zmq_curve_keypair (char *z85_public_key, char *z85_secret_key)
+{
+#ifdef HAVE_LIBSODIUM
+#   if crypto_box_PUBLICKEYBYTES != 32 \
+    || crypto_box_SECRETKEYBYTES != 32
+#       error "libsodium not built correctly"
+#   endif
+
+    uint8_t public_key [32];
+    uint8_t secret_key [32];
+
+    int rc = crypto_box_keypair (public_key, secret_key);
+    //  Is there a sensible errno to set here?
+    if (rc)
+        return rc;
+
+    zmq_z85_encode (z85_public_key, public_key, 32);
+    zmq_z85_encode (z85_secret_key, secret_key, 32);
+
+    return 0;
+#else // requires libsodium
+    (void) z85_public_key, (void) z85_secret_key;
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+
+//  --------------------------------------------------------------------------
+//  Initialize a new atomic counter, which is set to zero
+
+void *zmq_atomic_counter_new (void)
+{
+    zmq::atomic_counter_t *counter = new zmq::atomic_counter_t;
+    alloc_assert (counter);
+    return counter;
+}
+
+//  Se the value of the atomic counter
+
+void zmq_atomic_counter_set (void *counter_, int value_)
+{
+    ((zmq::atomic_counter_t *) counter_)->set (value_);
+}
+
+//  Increment the atomic counter, and return the old value
+
+int zmq_atomic_counter_inc (void *counter_)
+{
+    return ((zmq::atomic_counter_t *) counter_)->add (1);
+}
+
+//  Decrement the atomic counter and return 1 (if counter >= 1), or
+//  0 if counter hit zero.
+
+int zmq_atomic_counter_dec (void *counter_)
+{
+    return ((zmq::atomic_counter_t *) counter_)->sub (1)? 1: 0;
+}
+
+//  Return actual value of atomic counter
+
+int zmq_atomic_counter_value (void *counter_)
+{
+    return ((zmq::atomic_counter_t *) counter_)->get ();
+}
+
+//  Destroy atomic counter, and set reference to NULL
+
+void zmq_atomic_counter_destroy (void **counter_p_)
+{
+    delete ((zmq::atomic_counter_t *) *counter_p_);
+    *counter_p_ = NULL;
 }

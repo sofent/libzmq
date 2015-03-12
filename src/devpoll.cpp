@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -35,7 +35,8 @@
 #include "config.hpp"
 #include "i_poll_events.hpp"
 
-zmq::devpoll_t::devpoll_t () :
+zmq::devpoll_t::devpoll_t (const zmq::ctx_t &ctx_) :
+    ctx(ctx_),
     stopping (false)
 {
     devpoll_fd = open ("/dev/poll", O_RDWR);
@@ -125,12 +126,17 @@ void zmq::devpoll_t::reset_pollout (handle_t handle_)
 
 void zmq::devpoll_t::start ()
 {
-    worker.start (worker_routine, this);
+    ctx.start_thread (worker, worker_routine, this);
 }
 
 void zmq::devpoll_t::stop ()
 {
     stopping = true;
+}
+
+int zmq::devpoll_t::max_fds ()
+{
+    return -1;
 }
 
 void zmq::devpoll_t::loop ()

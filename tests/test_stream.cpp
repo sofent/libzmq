@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -36,10 +36,10 @@ typedef struct {
 //  8-byte size is set to 1 for backwards compatibility
 
 static zmtp_greeting_t greeting
-    = { { 0xFF, 0, 0, 0, 0, 0, 0, 0, 1, 0x7F }, { 3, 0 }, { 'N', 'U', 'L', 'L'} };
+= { { 0xFF, 0, 0, 0, 0, 0, 0, 0, 1, 0x7F }, { 3, 0 }, { 'N', 'U', 'L', 'L'}, 0, { 0 } };
 
 static void
-test_stream_to_dealer (void) 
+test_stream_to_dealer (void)
 {
     int rc;
 
@@ -53,6 +53,9 @@ test_stream_to_dealer (void)
 
     int zero = 0;
     rc = zmq_setsockopt (stream, ZMQ_LINGER, &zero, sizeof (zero));
+    assert (rc == 0);
+    int enabled = 1;
+    rc = zmq_setsockopt (stream, ZMQ_STREAM_NOTIFY, &enabled, sizeof (enabled));
     assert (rc == 0);
     rc = zmq_bind (stream, "tcp://127.0.0.1:5556");
     assert (rc == 0);
@@ -68,6 +71,7 @@ test_stream_to_dealer (void)
     rc = zmq_send (dealer, "Hello", 5, 0);
     assert (rc == 5);
 
+    //  Connecting sends a zero message
     //  First frame is identity
     zmq_msg_t identity;
     rc = zmq_msg_init (&identity);
@@ -76,8 +80,33 @@ test_stream_to_dealer (void)
     assert (rc > 0);
     assert (zmq_msg_more (&identity));
 
-    //  Second frame is greeting signature
+    // Verify the existence of Peer-Address metadata
+    char const* peer_address = zmq_msg_gets (&identity, "Peer-Address");
+    assert (peer_address != 0);
+    assert (streq (peer_address, "127.0.0.1"));
+
+    //  Second frame is zero
     byte buffer [255];
+    rc = zmq_recv (stream, buffer, 255, 0);
+    assert (rc == 0);
+
+    // Verify the existence of Peer-Address metadata
+    peer_address = zmq_msg_gets (&identity, "Peer-Address");
+    assert (peer_address != 0);
+    assert (streq (peer_address, "127.0.0.1"));
+
+    //  Real data follows
+    //  First frame is identity
+    rc = zmq_msg_recv (&identity, stream, 0);
+    assert (rc > 0);
+    assert (zmq_msg_more (&identity));
+
+    // Verify the existence of Peer-Address metadata
+    peer_address = zmq_msg_gets (&identity, "Peer-Address");
+    assert (peer_address != 0);
+    assert (streq (peer_address, "127.0.0.1"));
+
+    //  Second frame is greeting signature
     rc = zmq_recv (stream, buffer, 255, 0);
     assert (rc == 10);
     assert (memcmp (buffer, greeting.signature, 10) == 0);
@@ -89,20 +118,18 @@ test_stream_to_dealer (void)
     assert (rc == sizeof (greeting));
 
     //  Now we expect the data from the DEALER socket
-    //  First frame is, again, the identity of the connection
-    rc = zmq_msg_recv (&identity, stream, 0);
-    assert (rc > 0);
-    assert (zmq_msg_more (&identity));
-
-    //  Second frame contains the rest of greeting along with
-    //  the Ready command
+    //  We want the rest of greeting along with the Ready command
     int bytes_read = 0;
     while (bytes_read < 97) {
+        //  First frame is the identity of the connection (each time)
+        rc = zmq_msg_recv (&identity, stream, 0);
+        assert (rc > 0);
+        assert (zmq_msg_more (&identity));
+        //  Second frame contains the next chunk of data
         rc = zmq_recv (stream, buffer + bytes_read, 255 - bytes_read, 0);
         assert (rc >= 0);
         bytes_read += rc;
     }
-    assert (rc == 97);
 
     //  First two bytes are major and minor version numbers.
     assert (buffer [0] == 3);       //  ZMTP/3.0
@@ -170,47 +197,71 @@ test_stream_to_stream (void)
     //  Set-up our context and sockets
     void *ctx = zmq_ctx_new ();
     assert (ctx);
-    
+
     void *server = zmq_socket (ctx, ZMQ_STREAM);
     assert (server);
-    rc = zmq_bind (server, "tcp://127.0.0.1:9080");
+    int enabled = 1;
+    rc = zmq_setsockopt (server, ZMQ_STREAM_NOTIFY, &enabled, sizeof (enabled));
+    assert (rc == 0);
+    rc = zmq_bind (server, "tcp://127.0.0.1:9070");
     assert (rc == 0);
 
     void *client = zmq_socket (ctx, ZMQ_STREAM);
     assert (client);
-    rc = zmq_connect (client, "tcp://localhost:9080");
+    rc = zmq_setsockopt (client, ZMQ_STREAM_NOTIFY, &enabled, sizeof (enabled));
     assert (rc == 0);
-    //  It would be less surprising to get an empty message instead
-    //  of having to fetch the identity like this [PH 2013/06/27]
+    rc = zmq_connect (client, "tcp://localhost:9070");
+    assert (rc == 0);
     uint8_t id [256];
     size_t id_size = 256;
+    uint8_t buffer [256];
+
+    //  Connecting sends a zero message
+    //  Server: First frame is identity, second frame is zero
+    id_size = zmq_recv (server, id, 256, 0);
+    assert (id_size > 0);
+    rc = zmq_recv (server, buffer, 256, 0);
+    assert (rc == 0);
+    //  Client: First frame is identity, second frame is zero
+    id_size = zmq_recv (client, id, 256, 0);
+    assert (id_size > 0);
+    rc = zmq_recv (client, buffer, 256, 0);
+    assert (rc == 0);
+
+    //  Sent HTTP request on client socket
+    //  Get server identity
     rc = zmq_getsockopt (client, ZMQ_IDENTITY, id, &id_size);
     assert (rc == 0);
-    
-    //  Sent HTTP request on client socket
     //  First frame is server identity
     rc = zmq_send (client, id, id_size, ZMQ_SNDMORE);
     assert (rc == (int) id_size);
     //  Second frame is HTTP GET request
     rc = zmq_send (client, "GET /\n\n", 7, 0);
     assert (rc == 7);
-    
+
     //  Get HTTP request; ID frame and then request
     id_size = zmq_recv (server, id, 256, 0);
     assert (id_size > 0);
-    uint8_t buffer [256];
     rc = zmq_recv (server, buffer, 256, 0);
-    assert (rc > 0);
+    assert (rc != -1);
     assert (memcmp (buffer, "GET /\n\n", 7) == 0);
-    
+
     //  Send reply back to client
     char http_response [] =
-        "HTTP/1.0 200 OK\r\n" 
-        "Content-Type: text/plain\r\n" 
-        "\r\n" 
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
         "Hello, World!";
-    zmq_send (server, id, id_size, ZMQ_SNDMORE);
-    zmq_send (server, http_response, sizeof (http_response), 0);
+    rc = zmq_send (server, id, id_size, ZMQ_SNDMORE);
+    assert (rc != -1);
+    rc = zmq_send (server, http_response, sizeof (http_response), ZMQ_SNDMORE);
+    assert (rc != -1);
+
+    //  Send zero to close connection to client
+    rc = zmq_send (server, id, id_size, ZMQ_SNDMORE);
+    assert (rc != -1);
+    rc = zmq_send (server, NULL, 0, ZMQ_SNDMORE);
+    assert (rc != -1);
 
     //  Get reply at client and check that it's complete
     id_size = zmq_recv (client, id, 256, 0);
@@ -218,6 +269,22 @@ test_stream_to_stream (void)
     rc = zmq_recv (client, buffer, 256, 0);
     assert (rc == sizeof (http_response));
     assert (memcmp (buffer, http_response, sizeof (http_response)) == 0);
+
+    // //  Get disconnection notification
+    // FIXME: why does this block? Bug in STREAM disconnect notification?
+    // id_size = zmq_recv (client, id, 256, 0);
+    // assert (id_size > 0);
+    // rc = zmq_recv (client, buffer, 256, 0);
+    // assert (rc == 0);
+
+    rc = zmq_close (server);
+    assert (rc == 0);
+
+    rc = zmq_close (client);
+    assert (rc == 0);
+
+    rc = zmq_ctx_term (ctx);
+    assert (rc == 0);
 }
 
 

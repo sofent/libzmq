@@ -9,12 +9,83 @@ if(APPLE)
   option(ZMQ_BUILD_FRAMEWORK "Build as OS X framework" ON)
 endif()
 
+if(WIN32)
+option(WITH_TWEETNACL "Build with tweetnacl" OFF)
+else()
+option(WITH_TWEETNACL "Build with tweetnacl" ON)
+endif()
 
-set(POLLER "" CACHE STRING "Choose polling system manually. valid values are
+if(WITH_TWEETNACL)
+  add_definitions(-DHAVE_TWEETNACL -DHAVE_LIBSODIUM)
+  include_directories(
+    tweetnacl/contrib/randombytes
+    tweetnacl/src
+    )
+
+  set(TWEETNACL_SOURCES
+    tweetnacl/src/tweetnacl.c 
+    )
+  if(WIN32)
+  else()
+    list(APPEND TWEETNACL_SOURCES tweetnacl/contrib/randombytes/devurandom.c)
+  endif()
+else()
+  find_library(SODIUM_FOUND sodium)
+endif()
+
+
+
+set(POLLER "" CACHE STRING "Choose polling system. valid values are
                             kqueue, epoll, devpoll, poll or select [default=autodetect]")
 
-if(     NOT POLLER STREQUAL ""
-    AND NOT POLLER STREQUAL "kqueue"
+include(CheckFunctionExists)
+include(CheckTypeSize)
+if(POLLER STREQUAL "")
+    set(CMAKE_REQUIRED_INCLUDES sys/event.h)
+    check_function_exists(kqueue HAVE_KQUEUE)
+    set(CMAKE_REQUIRED_INCLUDES )
+    if(HAVE_KQUEUE)
+        set(POLLER "kqueue")
+    else()
+        set(CMAKE_REQUIRED_INCLUDES sys/epoll.h)
+        check_function_exists(epoll_create HAVE_EPOLL)
+        set(CMAKE_REQUIRED_INCLUDES )
+        if(HAVE_EPOLL)
+            set(POLLER "epoll")
+        else()
+            set(CMAKE_REQUIRED_INCLUDES sys/devpoll.h)
+            check_type_size("struct pollfd" DEVPOLL)
+            set(CMAKE_REQUIRED_INCLUDES )
+            if(HAVE_DEVPOLL)
+                set(POLLER "devpoll")
+            else()
+                set(CMAKE_REQUIRED_INCLUDES poll.h)
+                check_function_exists(poll HAVE_POLL)
+                set(CMAKE_REQUIRED_INCLUDES )
+                if(HAVE_POLL)
+                    set(POLLER "poll")
+                else()
+                    if(WIN32)
+                        set(CMAKE_REQUIRED_INCLUDES winsock2.h)
+                        set(HAVE_SELECT 1)
+                    else()
+                        set(CMAKE_REQUIRED_INCLUDES sys/select.h)
+                        check_function_exists(select HAVE_SELECT)
+                    endif()
+                    set(CMAKE_REQUIRED_INCLUDES )
+                    if(HAVE_SELECT)
+                        set(POLLER "select")
+                    else()
+                        message(FATAL_ERROR
+                            "Could not autodetect polling method")
+                    endif()
+                endif()
+            endif()
+        endif()
+    endif()
+endif()
+
+if(     NOT POLLER STREQUAL "kqueue"
     AND NOT POLLER STREQUAL "epoll"
     AND NOT POLLER STREQUAL "devpoll"
     AND NOT POLLER STREQUAL "poll"
@@ -24,7 +95,7 @@ endif()
 
 if(NOT ${POLLER} STREQUAL "")
   string(TOUPPER ${POLLER} UPPER_POLLER)
-  set(ZMQ_FORCE_${UPPER_POLLER} 1)
+  set(ZMQ_USE_${UPPER_POLLER} 1)
 endif()
 
 set(ZMQ_CMAKE_MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/builds/cmake/Modules)
@@ -34,12 +105,12 @@ include(TestZMQVersion)
 include(ZMQSourceRunChecks)
 include(CheckIncludeFiles)
 include(CheckLibraryExists)
-include(CheckFunctionExists)
 include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
 include(CheckCSourceCompiles)
 include(CheckCSourceRuns)
 include(CMakeDependentOption)
+include(CheckCXXSymbolExists)
 
 check_include_files(ifaddrs.h ZMQ_HAVE_IFADDRS)
 check_include_files(windows.h ZMQ_HAVE_WINDOWS)
@@ -50,6 +121,9 @@ check_library_exists(ws2_32 printf "" HAVE_WS2_32) # TODO: Why doesn't something
 check_library_exists(ws2 printf "" HAVE_WS2)
 check_library_exists(rpcrt4 printf "" HAVE_RPCRT4) # UuidCreateSequential
 check_library_exists(iphlpapi printf "" HAVE_IPHLAPI) # GetAdaptersAddresses
+
+check_cxx_symbol_exists(SO_PEERCRED sys/socket.h ZMQ_HAVE_SO_PEERCRED)
+check_cxx_symbol_exists(LOCAL_PEERCRED sys/socket.h ZMQ_HAVE_LOCAL_PEERCRED)
 
 find_library(RT_LIBRARY rt)
 
@@ -74,15 +148,15 @@ set(CMAKE_REQUIRED_LIBRARIES rt)
 check_function_exists(clock_gettime HAVE_CLOCK_GETTIME)
 set(CMAKE_REQUIRED_LIBRARIES )
 
+set(CMAKE_REQUIRED_INCLUDES unistd.h)
+check_function_exists(fork HAVE_FORK)
+set(CMAKE_REQUIRED_INCLUDES )
+
 set(CMAKE_REQUIRED_INCLUDES sys/time.h)
 check_function_exists(gethrtime HAVE_GETHRTIME)
 set(CMAKE_REQUIRED_INCLUDES )
 
 add_definitions(-D_REENTRANT -D_THREAD_SAFE)
-
-if(WIN32)
-  add_definitions(-DDLL_EXPORT)
-endif()
 
 option(ENABLE_EVENTFD "Enable/disable eventfd" ZMQ_HAVE_EVENTFD)
 
@@ -264,14 +338,13 @@ set(LIBRARY_OUTPUT_PATH  ${CMAKE_CURRENT_BINARY_DIR}/lib)
 #-----------------------------------------------------------------------------
 # platform specifics
 
-if(MSVC)
-  add_definitions(
-    -DWIN32
-    -DDLL_EXPORT
-    # NB: May require tweaking for highly connected applications.
-    -DFD_SETSIZE=1024
-    -D_CRT_SECURE_NO_WARNINGS)
+if (WIN32)
+  # NB: May require tweaking for highly connected applications.
+  add_definitions (-DFD_SETSIZE=4096)
+  add_definitions (-D_CRT_SECURE_NO_WARNINGS)
+endif ()
 
+if(MSVC)
   # Parallel make.
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
 
@@ -289,6 +362,7 @@ endif()
 
 set(cxx-sources
         address.cpp
+        client.cpp
         clock.cpp
         ctx.cpp
         curve_client.cpp
@@ -308,7 +382,9 @@ set(cxx-sources
         kqueue.cpp
         lb.cpp
         mailbox.cpp
+        mailbox_safe.cpp
         mechanism.cpp
+        metadata.cpp
         msg.cpp
         mtrie.cpp
         object.cpp
@@ -320,7 +396,8 @@ set(cxx-sources
         pgm_sender.cpp
         pgm_socket.cpp
         pipe.cpp
-        plain_mechanism.cpp
+        plain_client.cpp
+        plain_server.cpp
         poll.cpp
         poller_base.cpp
         precompiled.cpp
@@ -336,9 +413,12 @@ set(cxx-sources
         req.cpp
         router.cpp
         select.cpp
+        server.cpp
         session_base.cpp
         signaler.cpp
         socket_base.cpp
+        socks.cpp
+        socks_connecter.cpp
         stream.cpp
         stream_engine.cpp
         sub.cpp
@@ -365,17 +445,21 @@ if(MINGW)
     set(CMAKE_RC_COMPILER_INIT windres)
     enable_language(RC)
     set(CMAKE_RC_COMPILE_OBJECT
-        "<CMAKE_RC_COMPILER> <FLAGS> --target=${rc_target} <DEFINES> -i <SOURCE> -o <OBJECT>")
+        "<CMAKE_RC_COMPILER> <FLAGS> -O coff --target=${rc_target} <DEFINES> -i <SOURCE> -o <OBJECT>")
   endmacro()
 
-  if(    ${CMAKE_SYSTEM_PROCESSOR} MATCHES "i386"
-      OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "i486"
-      OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "i586"
-      OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "i686"
+  if (NOT CMAKE_SYSTEM_PROCESSOR )
+    set (CMAKE_SYSTEM_PROCESSOR ${CMAKE_HOST_SYSTEM_PROCESSOR} )
+  endif ()
+
+  if(    CMAKE_SYSTEM_PROCESSOR MATCHES "i386"
+      OR CMAKE_SYSTEM_PROCESSOR MATCHES "i486"
+      OR CMAKE_SYSTEM_PROCESSOR MATCHES "i586"
+      OR CMAKE_SYSTEM_PROCESSOR MATCHES "i686"
      # This also happens on x86_64 systems...what a worthless variable
-      OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86"
-      OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64"
-      OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "amd64")
+      OR CMAKE_SYSTEM_PROCESSOR MATCHES "x86"
+      OR CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64"
+      OR CMAKE_SYSTEM_PROCESSOR MATCHES "amd64")
 
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
       set_rc_arch("pe-x86-64")
@@ -412,8 +496,8 @@ foreach(source ${cxx-sources})
   list(APPEND sources ${CMAKE_CURRENT_SOURCE_DIR}/src/${source})
 endforeach()
 
-foreach(source ${rc-sources})
-  list(APPEND sources ${CMAKE_CURRENT_BINARY_DIR}/${source})
+foreach(source ${TWEETNACL_SOURCES})
+  list(APPEND sources ${CMAKE_CURRENT_SOURCE_DIR}/${source})
 endforeach()
 
 foreach(source ${rc-sources})
@@ -424,7 +508,7 @@ endforeach()
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/builds/cmake/platform.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/platform.hpp)
 list(APPEND sources ${CMAKE_CURRENT_BINARY_DIR}/platform.hpp)
 
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/libzmq.pc.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/libzmq.pc)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/libzmq.pc.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/libzmq.pc @ONLY)
 set(zmq-pkgconfig ${CMAKE_CURRENT_BINARY_DIR}/libzmq.pc)
 
 if(NOT ZMQ_BUILD_FRAMEWORK)
@@ -495,7 +579,9 @@ if(MSVC)
   set_target_properties(libzmq PROPERTIES
     PUBLIC_HEADER "${public_headers}"
     RELEASE_POSTFIX "${_zmq_COMPILER}-mt-${ZMQ_VERSION_MAJOR}_${ZMQ_VERSION_MINOR}_${ZMQ_VERSION_PATCH}"
-    DEBUG_POSTFIX "${_zmq_COMPILER}-mt-gd-${ZMQ_VERSION_MAJOR}_${ZMQ_VERSION_MINOR}_${ZMQ_VERSION_PATCH}")
+    DEBUG_POSTFIX "${_zmq_COMPILER}-mt-gd-${ZMQ_VERSION_MAJOR}_${ZMQ_VERSION_MINOR}_${ZMQ_VERSION_PATCH}"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
+    COMPILE_DEFINITIONS "DLL_EXPORT")
   add_library(libzmq-static STATIC ${sources})
   set_target_properties(libzmq-static PROPERTIES
     PUBLIC_HEADER "${public_headers}"
@@ -505,16 +591,18 @@ if(MSVC)
     OUTPUT_NAME "libzmq")
 else()
     add_library(libzmq SHARED ${sources} ${public_headers} ${html-docs} ${readme-docs} ${zmq-pkgconfig})
+    set_target_properties(libzmq PROPERTIES
+                          COMPILE_DEFINITIONS "DLL_EXPORT"
+                          PUBLIC_HEADER "${public_headers}"
+                          VERSION ${ZMQ_VERSION}
+                          SOVERSION "${ZMQ_VERSION_MAJOR}.${ZMQ_VERSION_MINOR}.0")
     if(ZMQ_BUILD_FRAMEWORK)
       set_target_properties(libzmq PROPERTIES
                             FRAMEWORK TRUE
                             OUTPUT_NAME "ZeroMQ"
-                            PUBLIC_HEADER "${public_headers}"
                             MACOSX_FRAMEWORK_IDENTIFIER "org.zeromq.libzmq"
                             MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${ZMQ_VERSION}
-                            MACOSX_FRAMEWORK_BUNDLE_VERSION ${ZMQ_VERSION}
-                            VERSION ${ZMQ_VERSION}
-                            SOVERSION "${ZMQ_VERSION_MAJOR}.${ZMQ_VERSION_MINOR}.0")
+                            MACOSX_FRAMEWORK_BUNDLE_VERSION ${ZMQ_VERSION})
       set_source_files_properties(${html-docs} PROPERTIES
                                   MACOSX_PACKAGE_LOCATION doc)
       set_source_files_properties(${readme-docs} PROPERTIES
@@ -523,12 +611,17 @@ else()
                                   MACOSX_PACKAGE_LOCATION lib/pkgconfig)
     else()
       set_target_properties(libzmq PROPERTIES
-                             OUTPUT_NAME "zmq"
-                             PUBLIC_HEADER "${public_headers}")
+                            OUTPUT_NAME "zmq"
+                            )
     endif()
+    add_library(libzmq-static STATIC ${sources} ${public_headers} ${html-docs} ${readme-docs} ${zmq-pkgconfig})
+    set_target_properties(libzmq-static PROPERTIES
+      PUBLIC_HEADER "${public_headers}"
+      COMPILE_DEFINITIONS "ZMQ_STATIC"
+      OUTPUT_NAME "zmq-static")
 endif()
 
-target_link_libraries(libzmq ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(libzmq ${SODIUM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 if(HAVE_WS2_32)
   target_link_libraries(libzmq ws2_32)
 elseif(HAVE_WS2)
@@ -541,6 +634,10 @@ endif()
 
 if(HAVE_IPHLAPI)
   target_link_libraries(libzmq iphlpapi)
+endif()
+
+if(RT_LIBRARY)
+  target_link_libraries(libzmq ${RT_LIBRARY})
 endif()
 
 set(perf-tools local_lat
@@ -576,62 +673,15 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug") # Why?
   endforeach()
 endif()
 
-enable_testing()
-set(tests 
-        test_system
-        test_immediate
-        test_connect_resolve
-        test_ctx_destroy
-        test_ctx_options
-        test_disconnect_inproc
-        test_hwm
-        test_invalid_rep
-        test_iov
-        test_last_endpoint
-        test_msg_flags
-        test_pair_inproc
-        test_pair_tcp
-        test_probe_router
-        test_req_correlate
-        test_req_relaxed
-        test_reqrep_device
-        test_reqrep_inproc
-        test_reqrep_tcp
-        test_router_mandatory
-        test_security_curve
-        test_security_null
-        test_security_plain
-        test_shutdown_stress
-        test_spec_dealer
-        test_spec_pushpull
-        test_spec_rep
-        test_spec_req
-        test_spec_router
-        test_sub_forward
-        test_term_endpoint
-        test_timeo
-        test_inproc_connect)
-if(NOT WIN32)
-list(APPEND tests
-        test_monitor
-        test_pair_ipc
-        test_reqrep_ipc
-        test_stream)
-endif()		
+#-----------------------------------------------------------------------------
+# tests
 
-foreach(test ${tests})
-  add_executable(${test} tests/${test}.cpp)
-  target_link_libraries(${test} libzmq)
+set(ZMQ_BUILD_TESTS ON CACHE BOOL "Build the tests for ZeroMQ")
 
-  if(RT_LIBRARY)
-    target_link_libraries(${test} ${RT_LIBRARY})
-  endif()
-  if(WIN32)
-    add_test(NAME ${test} WORKING_DIRECTORY ${LIBRARY_OUTPUT_PATH} COMMAND ${test})
-  else()
-    add_test(NAME ${test} COMMAND ${test})
-  endif() 
-endforeach()
+if(ZMQ_BUILD_TESTS)
+  enable_testing() # Enable testing only works in root scope
+  ADD_SUBDIRECTORY(tests)
+endif()
 
 #-----------------------------------------------------------------------------
 # installer
@@ -645,9 +695,10 @@ if(MSVC)
   if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     install(TARGETS libzmq libzmq-static
             RUNTIME DESTINATION bin
+            ARCHIVE DESTINATION lib
             PUBLIC_HEADER DESTINATION include
             COMPONENT SDK)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/lib/libzmq${_zmq_COMPILER}-mt-gd-${ZMQ_VERSION_MAJOR}_${ZMQ_VERSION_MINOR}_${ZMQ_VERSION_PATCH}.pdb DESTINATION lib
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bin/libzmq${_zmq_COMPILER}-mt-gd-${ZMQ_VERSION_MAJOR}_${ZMQ_VERSION_MINOR}_${ZMQ_VERSION_PATCH}.pdb DESTINATION lib
             COMPONENT SDK)
   else()
     install(TARGETS libzmq
@@ -656,7 +707,7 @@ if(MSVC)
             COMPONENT Runtime)
   endif()
 else()
-  install(TARGETS libzmq
+  install(TARGETS libzmq libzmq-static
           RUNTIME DESTINATION bin
           ARCHIVE DESTINATION lib
           LIBRARY DESTINATION lib
@@ -668,11 +719,11 @@ endif()
 #          DESTINATION include
 #          COMPONENT SDK)
 
-if(NOT ZMQ_BUILD_FRAMEWORK)
-  file(GLOB private_headers "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp")
-  install(FILES ${sources} ${private_headers} DESTINATION src/zmq
-          COMPONENT SourceCode)
-endif()
+#if(NOT ZMQ_BUILD_FRAMEWORK)
+#  file(GLOB private_headers "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp")
+#  install(FILES ${sources} ${private_headers} DESTINATION src/zmq
+#          COMPONENT SourceCode)
+#endif()
 
 foreach(readme ${readme-docs})
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${readme} ${CMAKE_CURRENT_BINARY_DIR}/${readme}.txt)
@@ -681,7 +732,7 @@ foreach(readme ${readme-docs})
     if(MSVC)
       install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${readme}.txt DESTINATION .)
     else()
-      install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${readme}.txt DESTINATION etc/zmq)
+      install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${readme}.txt DESTINATION share/zmq)
     endif()
   endif()
 endforeach()

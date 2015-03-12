@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -67,6 +67,22 @@ void zmq::dist_t::match (pipe_t *pipe_)
     //  Mark the pipe as matching.
     pipes.swap (pipes.index (pipe_), matching);
     matching++;    
+}
+
+void zmq::dist_t::reverse_match ()
+{
+    pipes_t::size_type prev_matching = matching;
+
+    // Reset matching to 0
+    unmatch();
+
+    // Mark all matching pipes as not matching and vice-versa.
+    // To do this, push all pipes that are eligible but not
+    // matched - i.e. between "matching" and "eligible" -
+    // to the beginning of the queue.
+    for (pipes_t::size_type i = prev_matching; i < eligible; ++i) {
+        pipes.swap(i, matching++);
+    }
 }
 
 void zmq::dist_t::unmatch ()
@@ -193,4 +209,14 @@ bool zmq::dist_t::write (pipe_t *pipe_, msg_t *msg_)
         pipe_->flush ();
     return true;
 }
+
+bool zmq::dist_t::check_hwm ()
+{
+    for (pipes_t::size_type i = 0; i < matching; ++i)
+        if (!pipes [i]->check_hwm ())
+            return false;
+
+    return true;
+}
+
 

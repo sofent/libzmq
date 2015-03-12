@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -56,8 +56,8 @@ namespace zmq
         void plug (zmq::io_thread_t *io_thread_,
             zmq::session_base_t *session_);
         void terminate ();
-        void activate_in ();
-        void activate_out ();
+        void restart_input ();
+        void restart_output ();
         void zap_msg_available () {}
 
         //  i_poll_events interface implementation.

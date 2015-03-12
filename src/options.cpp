@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -33,6 +33,7 @@ zmq::options_t::options_t () :
     multicast_hops (1),
     sndbuf (0),
     rcvbuf (0),
+    tos (0),
     type (-1),
     linger (-1),
     reconnect_ivl (100),
@@ -44,16 +45,20 @@ zmq::options_t::options_t () :
     ipv6 (0),
     immediate (0),
     filter (false),
+    invert_matching(false),
     recv_identity (false),
-    raw_sock (false),
+    raw_socket (false),
+    raw_notify (false),
     tcp_keepalive (-1),
     tcp_keepalive_cnt (-1),
     tcp_keepalive_idle (-1),
     tcp_keepalive_intvl (-1),
     mechanism (ZMQ_NULL),
     as_server (0),
+    gss_plaintext (false),
     socket_id (0),
-    conflate (false)
+    conflate (false),
+    handshake_ivl (30000)
 {
 }
 
@@ -62,6 +67,9 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
 {
     bool is_int = (optvallen_ == sizeof (int));
     int value = is_int? *((int *) optval_): 0;
+#if defined (ZMQ_ACT_MILITANT)
+    bool malformed = true;          //  Did caller pass a bad option value?
+#endif
 
     switch (option_) {
         case ZMQ_SNDHWM:
@@ -86,11 +94,8 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
             break;
 
         case ZMQ_IDENTITY:
-            //  Empty identity is invalid as well as identity longer than
-            //  255 bytes. Identity starting with binary zero is invalid
-            //  as these are used for auto-generated identities.
-            if (optvallen_ > 0 && optvallen_ < 256
-            && *((const unsigned char *) optval_) != 0) {
+            //  Identity is any binary string from 1 to 255 octets
+            if (optvallen_ > 0 && optvallen_ < 256) {
                 identity_size = optvallen_;
                 memcpy (identity, optval_, identity_size);
                 return 0;
@@ -121,6 +126,13 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
         case ZMQ_RCVBUF:
             if (is_int && value >= 0) {
                 rcvbuf = value;
+                return 0;
+            }
+            break;
+
+        case ZMQ_TOS:
+            if (is_int && value >= 0) {
+                tos = value;
                 return 0;
             }
             break;
@@ -197,8 +209,21 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
             }
             break;
 
+        case ZMQ_SOCKS_PROXY:
+            if (optval_ == NULL && optvallen_ == 0) {
+                socks_proxy_address.clear ();
+                return 0;
+            }
+            else
+            if (optval_ != NULL && optvallen_ > 0 ) {
+                socks_proxy_address =
+                    std::string ((const char *) optval_, optvallen_);
+                return 0;
+            }
+            break;
+
         case ZMQ_TCP_KEEPALIVE:
-            if (is_int && (value >= -1 || value <= 1)) {
+            if (is_int && (value == -1 || value == 0 || value == 1)) {
                 tcp_keepalive = value;
                 return 0;
             }
@@ -249,6 +274,46 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
             }
             break;
 
+#       if defined ZMQ_HAVE_SO_PEERCRED || defined ZMQ_HAVE_LOCAL_PEERCRED
+        case ZMQ_IPC_FILTER_UID:
+            if (optvallen_ == 0 && optval_ == NULL) {
+                ipc_uid_accept_filters.clear ();
+                return 0;
+            }
+            else
+            if (optvallen_ == sizeof (uid_t) && optval_ != NULL) {
+                ipc_uid_accept_filters.insert (*((uid_t *) optval_));
+                return 0;
+            }
+            break;
+
+        case ZMQ_IPC_FILTER_GID:
+            if (optvallen_ == 0 && optval_ == NULL) {
+                ipc_gid_accept_filters.clear ();
+                return 0;
+            }
+            else
+            if (optvallen_ == sizeof (gid_t) && optval_ != NULL) {
+                ipc_gid_accept_filters.insert (*((gid_t *) optval_));
+                return 0;
+            }
+            break;
+#       endif
+
+#       if defined ZMQ_HAVE_SO_PEERCRED
+        case ZMQ_IPC_FILTER_PID:
+            if (optvallen_ == 0 && optval_ == NULL) {
+                ipc_pid_accept_filters.clear ();
+                return 0;
+            }
+            else
+            if (optvallen_ == sizeof (pid_t) && optval_ != NULL) {
+                ipc_pid_accept_filters.insert (*((pid_t *) optval_));
+                return 0;
+            }
+            break;
+#       endif
+
         case ZMQ_PLAIN_SERVER:
             if (is_int && (value == 0 || value == 1)) {
                 as_server = value;
@@ -286,7 +351,7 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
             break;
 
         case ZMQ_ZAP_DOMAIN:
-            if (optvallen_ >= 0 && optvallen_ < 256) {
+            if (optvallen_ < 256) {
                 zap_domain.assign ((const char *) optval_, optvallen_);
                 return 0;
             }
@@ -303,16 +368,31 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
             break;
 
         case ZMQ_CURVE_PUBLICKEY:
+            //  TODO: refactor repeated code for these three options
+            //  into set_curve_key (destination, optval, optlen) method
+            //  ==> set_curve_key (curve_public_key, optval_, optvallen_);
             if (optvallen_ == CURVE_KEYSIZE) {
                 memcpy (curve_public_key, optval_, CURVE_KEYSIZE);
                 mechanism = ZMQ_CURVE;
                 return 0;
             }
             else
+            if (optvallen_ == CURVE_KEYSIZE_Z85 + 1) {
+                if (zmq_z85_decode (curve_public_key, (char *) optval_)) {
+                    mechanism = ZMQ_CURVE;
+                    return 0;
+                }
+            }
+            else
+            //  Deprecated, not symmetrical with zmq_getsockopt
             if (optvallen_ == CURVE_KEYSIZE_Z85) {
-                zmq_z85_decode (curve_public_key, (char *) optval_);
-                mechanism = ZMQ_CURVE;
-                return 0;
+                char z85_key [CURVE_KEYSIZE_Z85 + 1];
+                memcpy (z85_key, (char *) optval_, CURVE_KEYSIZE_Z85);
+                z85_key [CURVE_KEYSIZE_Z85] = 0;
+                if (zmq_z85_decode (curve_public_key, z85_key)) {
+                    mechanism = ZMQ_CURVE;
+                    return 0;
+                }
             }
             break;
 
@@ -323,26 +403,51 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
                 return 0;
             }
             else
+            if (optvallen_ == CURVE_KEYSIZE_Z85 + 1) {
+                if (zmq_z85_decode (curve_secret_key, (char *) optval_)) {
+                    mechanism = ZMQ_CURVE;
+                    return 0;
+                }
+            }
+            else
+            //  Deprecated, not symmetrical with zmq_getsockopt
             if (optvallen_ == CURVE_KEYSIZE_Z85) {
-                zmq_z85_decode (curve_secret_key, (char *) optval_);
-                mechanism = ZMQ_CURVE;
-                return 0;
+                char z85_key [CURVE_KEYSIZE_Z85 + 1];
+                memcpy (z85_key, (char *) optval_, CURVE_KEYSIZE_Z85);
+                z85_key [CURVE_KEYSIZE_Z85] = 0;
+                if (zmq_z85_decode (curve_secret_key, z85_key)) {
+                    mechanism = ZMQ_CURVE;
+                    return 0;
+                }
             }
             break;
 
         case ZMQ_CURVE_SERVERKEY:
             if (optvallen_ == CURVE_KEYSIZE) {
                 memcpy (curve_server_key, optval_, CURVE_KEYSIZE);
-                as_server = 0;
                 mechanism = ZMQ_CURVE;
+                as_server = 0;
                 return 0;
             }
             else
+            if (optvallen_ == CURVE_KEYSIZE_Z85 + 1) {
+                if (zmq_z85_decode (curve_server_key, (char *) optval_)) {
+                    mechanism = ZMQ_CURVE;
+                    as_server = 0;
+                    return 0;
+                }
+            }
+            else
+            //  Deprecated, not symmetrical with zmq_getsockopt
             if (optvallen_ == CURVE_KEYSIZE_Z85) {
-                zmq_z85_decode (curve_server_key, (char *) optval_);
-                as_server = 0;
-                mechanism = ZMQ_CURVE;
-                return 0;
+                char z85_key [CURVE_KEYSIZE_Z85 + 1];
+                memcpy (z85_key, (char *) optval_, CURVE_KEYSIZE_Z85);
+                z85_key [CURVE_KEYSIZE_Z85] = 0;
+                if (zmq_z85_decode (curve_server_key, z85_key)) {
+                    mechanism = ZMQ_CURVE;
+                    as_server = 0;
+                    return 0;
+                }
             }
             break;
 #       endif
@@ -354,9 +459,72 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
             }
             break;
 
+        //  If libgssapi isn't installed, these options provoke EINVAL
+#       ifdef HAVE_LIBGSSAPI_KRB5
+        case ZMQ_GSSAPI_SERVER:
+            if (is_int && (value == 0 || value == 1)) {
+                as_server = value;
+                mechanism = ZMQ_GSSAPI;
+                return 0;
+            }
+            break;
+
+        case ZMQ_GSSAPI_PRINCIPAL:
+            if (optvallen_ > 0 && optvallen_ < 256 && optval_ != NULL) {
+                gss_principal.assign ((const char *) optval_, optvallen_);
+                mechanism = ZMQ_GSSAPI;
+                return 0;
+            }
+            break;
+
+        case ZMQ_GSSAPI_SERVICE_PRINCIPAL:
+            if (optvallen_ > 0 && optvallen_ < 256 && optval_ != NULL) {
+                gss_service_principal.assign ((const char *) optval_, optvallen_);
+                mechanism = ZMQ_GSSAPI;
+                as_server = 0;
+                return 0;
+            }
+            break;
+
+        case ZMQ_GSSAPI_PLAINTEXT:
+            if (is_int && (value == 0 || value == 1)) {
+                gss_plaintext = (value != 0);
+                return 0;
+            }
+            break;
+#       endif
+
+        case ZMQ_HANDSHAKE_IVL:
+            if (is_int && value >= 0) {
+                handshake_ivl = value;
+                return 0;
+            }
+            break;
+
+        case ZMQ_INVERT_MATCHING:
+            if (is_int) {
+                invert_matching = (value != 0);
+                return 0;
+            }
+            break;
+
         default:
+#if defined (ZMQ_ACT_MILITANT)
+            //  There are valid scenarios for probing with unknown socket option
+            //  values, e.g. to check if security is enabled or not. This will not
+            //  provoke a militant assert. However, passing bad values to a valid
+            //  socket option will, if ZMQ_ACT_MILITANT is defined.
+            malformed = false;
+#endif
             break;
     }
+#if defined (ZMQ_ACT_MILITANT)
+    //  There is no valid use case for passing an error back to the application
+    //  when it sent malformed arguments to a socket option. Use ./configure
+    //  --with-militant to enable this checking.
+    if (malformed)
+        zmq_assert (false);
+#endif
     errno = EINVAL;
     return -1;
 }
@@ -365,6 +533,9 @@ int zmq::options_t::getsockopt (int option_, void *optval_, size_t *optvallen_)
 {
     bool is_int = (*optvallen_ == sizeof (int));
     int *value = (int *) optval_;
+#if defined (ZMQ_ACT_MILITANT)
+    bool malformed = true;          //  Did caller pass a bad option value?
+#endif
 
     switch (option_) {
         case ZMQ_SNDHWM:
@@ -420,6 +591,13 @@ int zmq::options_t::getsockopt (int option_, void *optval_, size_t *optvallen_)
         case ZMQ_RCVBUF:
             if (is_int) {
                 *value = rcvbuf;
+                return 0;
+            }
+            break;
+
+        case ZMQ_TOS:
+            if (is_int) {
+                *value = tos;
                 return 0;
             }
             break;
@@ -505,6 +683,14 @@ int zmq::options_t::getsockopt (int option_, void *optval_, size_t *optvallen_)
         case ZMQ_IMMEDIATE:
             if (is_int) {
                 *value = immediate;
+                return 0;
+            }
+            break;
+
+        case ZMQ_SOCKS_PROXY:
+            if (*optvallen_ >= socks_proxy_address.size () + 1) {
+                memcpy (optval_, socks_proxy_address.c_str (), socks_proxy_address.size () + 1);
+                *optvallen_ = socks_proxy_address.size () + 1;
                 return 0;
             }
             break;
@@ -628,7 +814,63 @@ int zmq::options_t::getsockopt (int option_, void *optval_, size_t *optvallen_)
             }
             break;
 
+        //  If libgssapi isn't installed, these options provoke EINVAL
+#       ifdef HAVE_LIBGSSAPI_KRB5
+        case ZMQ_GSSAPI_SERVER:
+            if (is_int) {
+                *value = as_server && mechanism == ZMQ_GSSAPI;
+                return 0;
+            }
+            break;
+
+        case ZMQ_GSSAPI_PRINCIPAL:
+            if (*optvallen_ >= gss_principal.size () + 1) {
+                memcpy (optval_, gss_principal.c_str (), gss_principal.size () + 1);
+                *optvallen_ = gss_principal.size () + 1;
+                return 0;
+            }
+            break;
+
+        case ZMQ_GSSAPI_SERVICE_PRINCIPAL:
+            if (*optvallen_ >= gss_service_principal.size () + 1) {
+                memcpy (optval_, gss_service_principal.c_str (), gss_service_principal.size () + 1);
+                *optvallen_ = gss_service_principal.size () + 1;
+                return 0;
+            }
+            break;
+
+        case ZMQ_GSSAPI_PLAINTEXT:
+            if (is_int) {
+                *value = gss_plaintext;
+                return 0;
+            }
+            break;
+#endif
+
+        case ZMQ_HANDSHAKE_IVL:
+            if (is_int) {
+                *value = handshake_ivl;
+                return 0;
+            }
+            break;
+
+        case ZMQ_INVERT_MATCHING:
+            if (is_int) {
+                *value = invert_matching;
+                return 0;
+            }
+            break;
+
+        default:
+#if defined (ZMQ_ACT_MILITANT)
+            malformed = false;
+#endif
+            break;
     }
+#if defined (ZMQ_ACT_MILITANT)
+    if (malformed)
+        zmq_assert (false);
+#endif
     errno = EINVAL;
     return -1;
 }

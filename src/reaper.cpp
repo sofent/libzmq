@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -26,7 +26,7 @@ zmq::reaper_t::reaper_t (class ctx_t *ctx_, uint32_t tid_) :
     sockets (0),
     terminating (false)
 {
-    poller = new (std::nothrow) poller_t;
+    poller = new (std::nothrow) poller_t (*ctx_);
     alloc_assert (poller);
 
     mailbox_handle = poller->add_fd (mailbox.get_fd (), this);

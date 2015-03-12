@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -29,26 +29,27 @@
 #include "command.hpp"
 #include "ypipe.hpp"
 #include "mutex.hpp"
+#include "i_mailbox.hpp"
 
 namespace zmq
 {
 
-    class mailbox_t
+    class mailbox_t : public i_mailbox
     {
     public:
 
         mailbox_t ();
         ~mailbox_t ();
 
-        fd_t get_fd ();
+        fd_t get_fd () const;
         void send (const command_t &cmd_);
         int recv (command_t *cmd_, int timeout_);
-        
+
 #ifdef HAVE_FORK
         // close the file descriptors in the signaller. This is used in a forked
         // child process to close the file descriptors so that they do not interfere
         // with the context in the parent process.
-        void forked() { signaler.forked(); }
+        void forked () { signaler.forked (); }
 #endif
 
     private:

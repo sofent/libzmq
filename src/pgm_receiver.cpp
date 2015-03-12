@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -102,12 +102,12 @@ void zmq::pgm_receiver_t::terminate ()
     delete this;
 }
 
-void zmq::pgm_receiver_t::activate_out ()
+void zmq::pgm_receiver_t::restart_output ()
 {
     drop_subscriptions ();
 }
 
-void zmq::pgm_receiver_t::activate_in ()
+void zmq::pgm_receiver_t::restart_input ()
 {
     zmq_assert (session != NULL);
     zmq_assert (active_tsi != NULL);
@@ -288,7 +288,7 @@ void zmq::pgm_receiver_t::drop_subscriptions ()
 {
     msg_t msg;
     msg.init ();
-    while (session->pull_msg (&msg))
+    while (session->pull_msg (&msg) == 0)
         msg.close ();
 }
 

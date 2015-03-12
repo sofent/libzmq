@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -36,7 +36,7 @@ void test_round_robin_out (void *ctx)
         rep [peer] = zmq_socket (ctx, ZMQ_REP);
         assert (rep [peer]);
 
-        int timeout = 100;
+        int timeout = 250;
         rc = zmq_setsockopt (rep [peer], ZMQ_RCVTIMEO, &timeout, sizeof (int));
         assert (rc == 0);
 
@@ -46,7 +46,7 @@ void test_round_robin_out (void *ctx)
     //  We have to give the connects time to finish otherwise the requests 
     //  will not properly round-robin. We could alternatively connect the
     //  REQ sockets to the REP sockets.
-    zmq_sleep(1);
+    msleep (SETTLE_TIME);
     
     // Send our peer-replies, and expect every REP it used once in order
     for (size_t peer = 0; peer < services; peer++) {
@@ -83,7 +83,7 @@ void test_req_only_listens_to_current_peer (void *ctx)
         router [i] = zmq_socket (ctx, ZMQ_ROUTER);
         assert (router [i]);
 
-        int timeout = 100;
+        int timeout = 250;
         rc = zmq_setsockopt (router [i], ZMQ_RCVTIMEO, &timeout, sizeof (timeout));
         assert (rc == 0);
 
@@ -195,7 +195,7 @@ void test_block_on_send_no_peers (void *ctx)
     void *sc = zmq_socket (ctx, ZMQ_REQ);
     assert (sc);
 
-    int timeout = 100;
+    int timeout = 250;
     int rc = zmq_setsockopt (sc, ZMQ_SNDTIMEO, &timeout, sizeof (timeout));
     assert (rc == 0);
 

@@ -62,6 +62,7 @@ The request-reply pattern is used for sending requests from a ZMQ_REQ _client_
 to one or more ZMQ_REP _services_, and receiving subsequent replies to each
 request sent.
 
+The request-reply pattern is formally defined by http://rfc.zeromq.org/spec:28.
 
 ZMQ_REQ
 ^^^^^^^
@@ -168,6 +169,7 @@ Publish-subscribe pattern
 The publish-subscribe pattern is used for one-to-many distribution of data from
 a single _publisher_ to multiple _subscribers_ in a fan out fashion.
 
+The publish-subscribe pattern is formally defined by http://rfc.zeromq.org/spec:29.
 
 ZMQ_PUB
 ^^^^^^^
@@ -249,6 +251,7 @@ a pipeline. Data always flows down the pipeline, and each stage of the pipeline
 is connected to at least one _node_. When a pipeline stage is connected to
 multiple _nodes_ data is round-robined among all connected _nodes_.
 
+The pipeline pattern is formally defined by http://rfc.zeromq.org/spec:30.
 
 ZMQ_PUSH
 ^^^^^^^^
@@ -296,6 +299,7 @@ The exclusive pair pattern is used to connect a peer to precisely one other
 peer. This pattern is used for inter-thread communication across the inproc
 transport.
 
+The exclusive pair pattern is formally defined by http://rfc.zeromq.org/spec:31.
 
 ZMQ_PAIR
 ^^^^^^^^
@@ -347,13 +351,17 @@ routed to, and unroutable messages shall cause an EHOSTUNREACH or EAGAIN error.
 To open a connection to a server, use the zmq_connect call, and then fetch the 
 socket identity using the ZMQ_IDENTITY zmq_getsockopt call.
 
-To close a specific client connection, as a server, send the identity frame
-followed by a zero-length message (see EXAMPLE section).
+To close a specific connection, send the identity frame followed by a
+zero-length message (see EXAMPLE section).
 
-The ZMQ_MSGMORE flag is ignored on data frames. You must send one identity frame
+When a connection is made, a zero-length message will be received by the
+application.  Similarly, when the peer disconnects (or the connection is lost),
+a zero-length message will be received by the application.
+
+The ZMQ_SNDMORE flag is ignored on data frames. You must send one identity frame
 followed by one data frame.
 
-Also, please note that omitting the ZMQ_MSGMORE flag will prevent sending further
+Also, please note that omitting the ZMQ_SNDMORE flag will prevent sending further
 data (from any client) on the same socket.
 
 [horizontal]
@@ -398,10 +406,17 @@ assert (rc == 0);
 /* Data structure to hold the ZMQ_STREAM ID */
 uint8_t id [256];
 size_t id_size = 256;
+/* Data structure to hold the ZMQ_STREAM received data */
+uint8_t raw [256];
+size_t raw_size = 256;
 while (1) {
 	/*  Get HTTP request; ID frame and then request */
-	id_size = zmq_recv (server, id, 256, 0);
+	id_size = zmq_recv (socket, id, 256, 0);
 	assert (id_size > 0);
+	do {
+		raw_size = zmq_recv (socket, raw, 256, 0);
+		assert (raw_size >= 0);
+	} while (raw_size == 256);
 	/* Prepares the response */
 	char http_response [] =
 		"HTTP/1.0 200 OK\r\n"

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2007-2013 Contributors as noted in the AUTHORS file
+    Copyright (c) 2007-2015 Contributors as noted in the AUTHORS file
 
     This file is part of 0MQ.
 
@@ -26,11 +26,12 @@
 
 #include "own.hpp"
 #include "array.hpp"
+#include "blob.hpp"
 #include "stdint.hpp"
 #include "poller.hpp"
 #include "atomic_counter.hpp"
 #include "i_poll_events.hpp"
-#include "mailbox.hpp"
+#include "i_mailbox.hpp"
 #include "stdint.hpp"
 #include "clock.hpp"
 #include "pipe.hpp"
@@ -65,7 +66,7 @@ namespace zmq
             uint32_t tid_, int sid_);
 
         //  Returns the mailbox associated with this socket.
-        mailbox_t *get_mailbox ();
+        i_mailbox *get_mailbox ();
 
         //  Interrupt blocking call if the socket is stuck in one.
         //  This function can be called from a different thread!
@@ -106,20 +107,23 @@ namespace zmq
 
         int monitor (const char *endpoint_, int events_);
 
-        void event_connected (std::string &addr_, int fd_);
-        void event_connect_delayed (std::string &addr_, int err_);
-        void event_connect_retried (std::string &addr_, int interval_);
-        void event_listening (std::string &addr_, int fd_);
-        void event_bind_failed (std::string &addr_, int err_);
-        void event_accepted (std::string &addr_, int fd_);
-        void event_accept_failed (std::string &addr_, int err_);
-        void event_closed (std::string &addr_, int fd_);        
-        void event_close_failed (std::string &addr_, int fd_);  
-        void event_disconnected (std::string &addr_, int fd_); 
+        void set_fd(fd_t fd_);
+        fd_t fd();
+
+        void event_connected (const std::string &addr_, int fd_);
+        void event_connect_delayed (const std::string &addr_, int err_);
+        void event_connect_retried (const std::string &addr_, int interval_);
+        void event_listening (const std::string &addr_, int fd_);
+        void event_bind_failed (const std::string &addr_, int err_);
+        void event_accepted (const std::string &addr_, int fd_);
+        void event_accept_failed (const std::string &addr_, int err_);
+        void event_closed (const std::string &addr_, int fd_);
+        void event_close_failed (const std::string &addr_, int fd_);
+        void event_disconnected (const std::string &addr_, int fd_);
 
     protected:
 
-        socket_base_t (zmq::ctx_t *parent_, uint32_t tid_, int sid_);
+        socket_base_t (zmq::ctx_t *parent_, uint32_t tid_, int sid_, bool thread_safe_ = false);
         virtual ~socket_base_t ();
 
         //  Concrete algorithms for the x- methods are to be defined by
@@ -128,7 +132,7 @@ namespace zmq
             bool subscribe_to_all_ = false) = 0;
 
         //  The default implementation assumes there are no specific socket
-        //  options for the particular socket type. If not so, overload this
+        //  options for the particular socket type. If not so, override this
         //  method.
         virtual int xsetsockopt (int option_, const void *optval_,
             size_t optvallen_);
@@ -141,6 +145,11 @@ namespace zmq
         virtual bool xhas_in ();
         virtual int xrecv (zmq::msg_t *msg_);
 
+        //  Returns the credential for the peer from which we have received
+        //  the last message. If no message has been received yet,
+        //  the function returns empty credential.
+        virtual blob_t get_credential () const;
+
         //  i_pipe_events will be forwarded to these functions.
         virtual void xread_activated (pipe_t *pipe_);
         virtual void xwrite_activated (pipe_t *pipe_);
@@ -151,10 +160,13 @@ namespace zmq
         void process_destroy ();
 
         // Socket event data dispath
-        void monitor_event (zmq_event_t data_, const std::string& addr_);
+        void monitor_event (int event_, int value_, const std::string& addr_);
 
         // Monitor socket cleanup
         void stop_monitor ();
+        
+        // Next assigned name on a zmq_connect() call used by ROUTER and STREAM socket types
+        std::string connect_rid;
 
     private:
         //  Creates new endpoint ID and adds the endpoint to the map.
@@ -211,7 +223,7 @@ namespace zmq
         void process_term (int linger_);
 
         //  Socket's mailbox object.
-        mailbox_t mailbox;
+        i_mailbox* mailbox;
 
         //  List of attached pipes.
         typedef array_t <pipe_t, 3> pipes_t;
@@ -230,6 +242,9 @@ namespace zmq
         //  True if the last message received had MORE flag set.
         bool rcvmore;
 
+        // File descriptor if applicable
+        fd_t file_desc;
+
         //  Improves efficiency of time measurement.
         clock_t clock;
 
@@ -242,9 +257,17 @@ namespace zmq
         // Last socket endpoint resolved URI
         std::string last_endpoint;
 
-        socket_base_t (const socket_base_t&);
-        const socket_base_t &operator = (const socket_base_t&);
+        // Indicate if the socket is thread safe
+        bool thread_safe;
+
+        // Signaler to be used in the reaping stage
+        signaler_t* reaper_signaler;
+
+        // Mutex for synchronize access to the socket in thread safe mode
         mutex_t sync;
+
+        socket_base_t (const socket_base_t&);
+        const socket_base_t &operator = (const socket_base_t&);        
     };
 
 }
